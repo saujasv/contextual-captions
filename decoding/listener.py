@@ -72,13 +72,13 @@ class CLIPListener(Listener):
             ).to(self.device, dtype=torch.bfloat16)
 
         image_features = self.model.encode_image(image_inputs)
-        image_features /= image_features.norm(dim=-1, keepdim=True)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         return rearrange(image_features, "(b n) d -> b n d", b=len(images))
 
     def encode_texts(self, texts: List[str]):
         text_inputs = self.tokenizer(texts).to(self.device)
         text_features = self.model.encode_text(text_inputs)
-        text_features /= text_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         return text_features
 
     @torch.no_grad()
