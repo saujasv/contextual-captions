@@ -67,6 +67,6 @@ if __name__ == "__main__":
     # Average metrics
     avg_metrics = {
         metric_name: sum([x[metric_name] for x in metrics]) / len(metrics)
-        for metric_name in metrics[0]
+        for metric_name in evaluation_functions
     }
     print(avg_metrics)

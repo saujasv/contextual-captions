@@ -77,11 +77,12 @@ class CLIPListener(Listener):
 
     def encode_texts(self, texts: List[str]):
         text_inputs = self.tokenizer(texts).to(self.device)
+        text_inputs.requires_grad_(True)  # Enable gradient tracking for text inputs
         text_features = self.model.encode_text(text_inputs)
         text_features /= text_features.norm(dim=-1, keepdim=True)
-        return text_features
+        return text_features, text_inputs
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def score_texts(
         self,
         texts: List[str],
@@ -95,12 +96,12 @@ class CLIPListener(Listener):
         else:
             image_embeddings = image_features
 
-        text_features = self.encode_texts(texts)
+        text_features, text_input_ids = self.encode_texts(texts)
         text_probs = (
             self.model.logit_scale * image_embeddings @ text_features.T
         ).log_softmax(dim=-2)
 
-        return text_probs
+        return text_probs, text_input_ids
 
     @torch.no_grad()
     def evaluate_success(
@@ -112,7 +113,7 @@ class CLIPListener(Listener):
         if isinstance(targets, int):
             targets = [targets for _ in texts]
 
-        text_probs = self.score_texts(texts, [images])
+        text_probs, text_input_ids = self.score_texts(texts, [images])
         predictions = text_probs.argmax(dim=-2)
 
         return (
@@ -124,3 +125,19 @@ class CLIPListener(Listener):
             .mean()
             .item()
         )
+    
+    def compute_gradients(
+        self,
+        text_probs: torch.Tensor,
+        text_input_ids: torch.Tensor,
+    ):
+        # Ensure targets are a tensor and on the same device as text_probs
+        targets = torch.arange(text_probs.size(0), device=text_probs.device)
+        # One hot encode targets
+        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=text_probs.size(1)).float()
+
+        # Compute loss with respect to the targets
+        loss = torch.nn.functional.binary_cross_entropy(text_probs, targets_one_hot, reduction='sum')
+        loss.backward()  # Compute gradients with respect to text inputs
+
+        return text_input_ids.grad  # Return gradients
