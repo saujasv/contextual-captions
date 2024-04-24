@@ -49,7 +49,7 @@ if __name__ == "__main__":
     ]
 
     model, _, preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-32", pretrained="openai", device="cuda:0", precision="bf16"
+        "ViT-B-32", pretrained="clip-vit-base-patch32/pytorch_model.bin", device="cuda:0", precision="bf16"
     )
     tokenizer = open_clip.get_tokenizer("ViT-B-32")
     listener = CLIPListener(model, preprocess, tokenizer, device="cuda:0")
