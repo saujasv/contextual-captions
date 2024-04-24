@@ -63,4 +63,10 @@ if __name__ == "__main__":
         evaluation_functions,
         "/data/tir/projects/tir3/users/svadugur/pragmatic-clip/image-sets",
     )
-    print(metrics)
+
+    # Average metrics
+    avg_metrics = {
+        metric_name: sum([x[metric_name] for x in metrics]) / len(metrics)
+        for metric_name in metrics[0]
+    }
+    print(avg_metrics)
