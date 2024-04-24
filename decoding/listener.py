@@ -79,7 +79,6 @@ class CLIPListener(Listener):
         text_inputs = self.tokenizer(texts).to(self.device)
         text_features = self.model.encode_text(text_inputs)
         text_features /= text_features.norm(dim=-1, keepdim=True)
-        text_features.requires_grad_(True)  # Enable gradient tracking for text_features
         return text_features
 
     @torch.no_grad()
