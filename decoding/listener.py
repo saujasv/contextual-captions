@@ -88,7 +88,7 @@ class CLIPListener(Listener):
         text_features = text_features.permute(1, 0, 2)  # LND -> NLD
         text_features = self.model.ln_final(text_features)  # [batch_size, n_ctx, transformer.width]
 
-        pooled_text_features, _ = text_global_pool(x, text_inputs, self.model.text_pool_type)
+        pooled_text_features, _ = text_global_pool(text_features, text_inputs, self.model.text_pool_type)
         if self.model.text_projection is not None:
             if isinstance(self.model.text_projection, nn.Linear):
                 pooled_text_features = self.model.text_projection(pooled_text_features)
