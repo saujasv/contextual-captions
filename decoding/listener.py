@@ -1,7 +1,9 @@
 from typing import List, Union, Optional
 from pathlib import Path
 import open_clip
+from open_clip.transformer import text_global_pool
 import torch
+from torch import nn
 import torchvision.transforms.transforms as T
 from PIL import Image
 from einops import rearrange
@@ -77,9 +79,24 @@ class CLIPListener(Listener):
 
     def encode_texts(self, texts: List[str]):
         text_inputs = self.tokenizer(texts).to(self.device)
-        text_features = self.model.encode_text(text_inputs)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        return text_features
+        cast_dtype = self.model.transformer.get_cast_dtype()
+
+        text_features = self.model.token_embedding(text_inputs).to(cast_dtype)  # [batch_size, n_ctx, d_model]
+        text_features = text_features + self.model.positional_embedding.to(cast_dtype)
+        text_features = text_features.permute(1, 0, 2)  # NLD -> LND
+        text_features = self.model.transformer(text_features, attn_mask=self.model.attn_mask)
+        text_features = text_features.permute(1, 0, 2)  # LND -> NLD
+        text_features = self.model.ln_final(text_features)  # [batch_size, n_ctx, transformer.width]
+
+        pooled_text_features, _ = text_global_pool(x, text_inputs, self.model.text_pool_type)
+        if self.model.text_projection is not None:
+            if isinstance(self.model.text_projection, nn.Linear):
+                pooled_text_features = self.model.text_projection(pooled_text_features)
+            else:
+                pooled_text_features = pooled_text_features @ self.model.text_projection
+
+        pooled_text_features = pooled_text_features / pooled_text_features.norm(dim=-1, keepdim=True)
+        return pooled_text_features, text_features
 
     @torch.no_grad()
     def score_texts(
@@ -95,9 +112,9 @@ class CLIPListener(Listener):
         else:
             image_embeddings = image_features
 
-        text_features = self.encode_texts(texts)
+        pooled_text_features, _ = self.encode_texts(texts)
         text_probs = (
-            self.model.logit_scale * image_embeddings @ text_features.T
+            self.model.logit_scale * image_embeddings @ pooled_text_features.T
         ).log_softmax(dim=-2)
 
         return text_probs
@@ -124,19 +141,3 @@ class CLIPListener(Listener):
             .mean()
             .item()
         )
-    
-    def compute_gradients(
-        self,
-        text_probs: torch.Tensor,
-        text_input_ids: torch.Tensor,
-    ):
-        # Ensure targets are a tensor and on the same device as text_probs
-        targets = torch.arange(text_probs.size(0), device=text_probs.device)
-        # One hot encode targets
-        targets_one_hot = torch.nn.functional.one_hot(targets, num_classes=text_probs.size(1)).float()
-
-        # Compute loss with respect to the targets
-        loss = torch.nn.functional.binary_cross_entropy(text_probs, targets_one_hot, reduction='sum')
-        loss.backward()  # Compute gradients with respect to text inputs
-
-        return text_input_ids.grad  # Return gradients
