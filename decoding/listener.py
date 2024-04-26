@@ -204,4 +204,4 @@ class CLIPListener(Listener):
         log_probs = F.log_softmax(outputs.logits[:, 32:, :], dim=-1)
         actual_log_probs = torch.gather(log_probs, 2, input_ids.unsqueeze(-1)).squeeze(-1)
         log_likelihood = actual_log_probs.sum(dim=-1)
-        return log_likelihood[target]
+        return log_likelihood[target] - torch.logsumexp(log_likelihood, 0)
