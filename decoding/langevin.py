@@ -1,5 +1,69 @@
 import torch
 from utils import get_input_ids
+from tqdm import auto
+
+
+def GwL(
+    context,
+    target,
+    seq_length,
+    energy_function,
+    embedding_layer,
+    n_iterations,
+    alpha,
+    P,
+    device,
+    init_state=None,
+):
+    grad_energy = torch.func.grad(energy_function)
+    embedding_matrix = embedding_layer.weight.unsqueeze(0).unsqueeze(0)
+    x = (
+        embedding_layer(
+            torch.randint(0, embedding_layer.num_embeddings, (1, seq_length)).to(device)
+        )
+        if init_state is None
+        else init_state
+    )
+
+    for n in auto.tqdm(range(n_iterations)):
+        tokens = get_input_ids(embedding_layer.weight, x)
+        log_p_x = energy_function(x, context, target)
+        if n % 100 == 0:
+            print(log_p_x.item())
+        grad_x = grad_energy(x, context, target)
+
+        D = embedding_matrix.expand((-1, seq_length, -1, -1)) - x.unsqueeze(2)
+        proposal_forward_unnorm = torch.exp(
+            -torch.einsum("bsd,bsvd->bsv", grad_x, D)
+            - (1 / alpha) * (D.norm(dim=-1, p=P) ** P)
+        )
+        # Remove self transition probability
+        proposal_forward_unnorm[:, torch.arange(proposal_forward_unnorm.shape[1]), tokens] = 0
+        proposal_forward = proposal_forward_unnorm / proposal_forward_unnorm.sum(
+            dim=-1, keepdim=True
+        )
+        tokens_next = (
+            torch.multinomial(proposal_forward.squeeze(), 1).squeeze().unsqueeze(0)
+        )
+
+        prob_forward = torch.gather(proposal_forward, 2, tokens_next.unsqueeze(2))
+        x_next = embedding_layer(tokens_next)
+        # Get a random idx for random scan (as the paper reports it's better than systematic)
+        idx = torch.randint(0, x.shape[1], (1,))
+        # OPTIM: Move this to the beginning so we don't have to compute for all tokens but just idx
+        x[:, idx, :] = x_next[:, idx, :]
+        del (
+            x_next,
+            tokens_next,
+            log_p_x,
+            grad_x,
+            D,
+            proposal_forward_unnorm,
+            proposal_forward,
+            prob_forward,
+        )
+
+    return get_input_ids(embedding_layer.weight, x)
 
 
 def pNCG(
@@ -113,7 +177,7 @@ if __name__ == "__main__":
     )
     images = [Image.open(image_path / img_set / f"img{i}.jpg") for i in range(10)]
 
-    inputs = processor(images=images[5], return_tensors="pt").to(model.device)
+    inputs = processor(images=images[5], return_tensors="pt").to(device=model.device, dtype=model.dtype)
     outputs = model.generate(
         **inputs, do_sample=True, output_scores=True, return_dict_in_generate=True
     )
@@ -127,21 +191,21 @@ if __name__ == "__main__":
     )
     print(init_state.shape)
 
-    print(
-        torch.gather(
-            torch.stack(outputs.scores, dim=1), 2, outputs.sequences.unsqueeze(2)
-        )
-        .log_softmax(dim=-1)
-        .sum()
-    )
+    # print(
+    #     torch.gather(
+    #         torch.stack(outputs.scores, dim=1), 2, outputs.sequences.unsqueeze(2)
+    #     )
+    #     .log_softmax(dim=-1)
+    #     .sum()
+    # )
 
-    sample = pNCG(
+    sample = GwL(
         images,
         5,
         16,
         speaker.energy,
         model.language_model.get_input_embeddings(),
-        100,
+        10000,
         1.0,
         10,
         model.device,
