@@ -8,6 +8,7 @@ from einops import rearrange
 import itertools
 from transformers import Blip2ForConditionalGeneration, Blip2Processor
 import torch.nn.functional as F
+from utils import get_input_ids
 
 
 class Listener:
@@ -137,17 +138,7 @@ class Blip2Listener:
         # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
         embeddings = self.model.language_model.get_input_embeddings().weight
 
-        embedding_matrix_size = input_embeds.size(0), input_embeds.size(1), -1, -1
-        input_embeds_size = -1, -1, embeddings.size(0), -1
-        input_ids = torch.argmin(
-            torch.abs(
-                input_embeds.unsqueeze(2).expand(input_embeds_size)
-                - embeddings.unsqueeze(0).unsqueeze(0).expand(embedding_matrix_size)
-            ).sum(dim=3),
-            dim=2,
-        )
-
-        return input_ids
+        return get_input_ids(embeddings, input_embeds)
 
     def energy(
         self,
@@ -157,7 +148,6 @@ class Blip2Listener:
     ) -> torch.Tensor:
         input_ids = self.get_input_ids(input_embeds)
 
-        input_embeds.retain_grad()
         pixel_values = torch.cat(
             [
                 self.processor(images=context, return_tensors="pt")["pixel_values"].to(
@@ -267,4 +257,7 @@ if __name__ == "__main__":
     embeds = model.language_model.get_input_embeddings()(input_ids)
     print(listener.get_input_ids(embeds))
 
-    print(listener.energy(embeds, images, 5))
+    grad_energy = torch.func.grad(listener.energy)
+    print(grad_energy.input_size)
+    # (embeds, images, 5)
+    # print(torch.einsum("bid,bid->bi", grad_energy, embeds).shape)
