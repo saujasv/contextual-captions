@@ -38,11 +38,11 @@ def pNCG(
         proposal_forward = proposal_forward_unnorm / proposal_forward_unnorm.sum(
             dim=-1, keepdim=True
         )
-        prob_forward = torch.gather(proposal_forward, 2, tokens.unsqueeze(2))
 
         tokens_next = (
             torch.multinomial(proposal_forward.squeeze(), 1).squeeze().unsqueeze(0)
         )
+        prob_forward = torch.gather(proposal_forward, 2, tokens_next.unsqueeze(2))
         x_next = embedding_layer(tokens_next)
         log_p_x_next = energy_function(x_next, context, target)
         grad_x_next = grad_energy(x_next, context, target)
@@ -54,12 +54,20 @@ def pNCG(
         proposal_backward = proposal_backward_unnorm / proposal_backward_unnorm.sum(
             dim=-1, keepdim=True
         )
-        prob_backward = torch.gather(proposal_backward, 2, tokens_next.unsqueeze(2))
+        prob_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
 
+        acceptance_probs = (
+            (prob_backward.log() - prob_forward.log()) + (log_p_x_next - log_p_x)
+        ).exp()
+        p = torch.rand(acceptance_probs.shape, device=acceptance_probs.device)
         accepted_transitions = torch.where(
-            (prob_backward.log() - prob_forward.log()) + (log_p_x_next - log_p_x) > 0
+            p < torch.min(torch.ones_like(acceptance_probs), acceptance_probs)
         )[1]
+        # import ipdb
+
+        # ipdb.set_trace()
         x[:, accepted_transitions, :] = x_next[:, accepted_transitions, :]
+        print("#accepted =", len(accepted_transitions))
         del (
             x_next,
             tokens_next,
@@ -75,6 +83,8 @@ def pNCG(
             proposal_forward_unnorm,
             proposal_forward,
             prob_forward,
+            acceptance_probs,
+            p,
         )
 
     return get_input_ids(embedding_layer.weight, x)
@@ -128,13 +138,13 @@ if __name__ == "__main__":
     sample = pNCG(
         images,
         5,
-        32,
+        16,
         speaker.energy,
         model.language_model.get_input_embeddings(),
         100,
-        10.0,
-        5,
+        1.0,
+        10,
         model.device,
-        init_state=init_state,
+        # init_state=init_state,
     )
     print(processor.batch_decode(sample, skip_special_tokens=True))
