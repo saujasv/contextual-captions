@@ -109,6 +109,58 @@ class Blip2Speaker:
         return log_likelihood
 
 
+class GPT2Speaker:
+    def __init__(self, model, processor):
+        self.model = model
+        self.processor = processor
+
+    def get_input_ids(self, input_embeds: torch.Tensor):
+        # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
+        embeddings = self.model.get_input_embeddings().weight
+
+        return get_input_ids(embeddings, input_embeds)
+
+    def energy(
+        self,
+        input_embeds: torch.Tensor,
+        contexts: List[Image.Image],
+        target: int,
+    ) -> torch.Tensor:
+        input_ids = self.get_input_ids(input_embeds)
+
+        embeds_with_bos = torch.cat(
+            (
+                self.model.get_input_embeddings()(
+                    torch.tensor(
+                        self.processor.bos_token_id,
+                        dtype=torch.long,
+                        device=self.model.device,
+                    )
+                )
+                .unsqueeze(0)
+                .unsqueeze(0),
+                input_embeds,
+            ),
+            dim=1,
+        )
+
+        outputs = self.model(
+            # inputs_embeds=embeds_with_bos,
+            inputs_embeds=input_embeds,
+            output_attentions=False,
+            output_hidden_states=False,
+            return_dict=True,
+        )
+
+        log_probs = F.log_softmax(outputs.logits, dim=-1)
+        actual_log_probs = torch.gather(log_probs, 2, input_ids.unsqueeze(2)).squeeze(
+            -1
+        )
+        log_likelihood = actual_log_probs.sum()
+
+        return -log_likelihood
+
+
 if __name__ == "__main__":
     from transformers import Blip2Processor, Blip2ForConditionalGeneration
     import torch

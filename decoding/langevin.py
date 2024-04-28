@@ -27,29 +27,33 @@ def pNCG(
     for n in range(n_iterations):
         tokens = get_input_ids(embedding_layer.weight, x)
         log_p_x = energy_function(x, context, target)
-        print(log_p_x)
+        print(log_p_x.item())
         grad_x = grad_energy(x, context, target)
 
         D = embedding_matrix.expand((-1, seq_length, -1, -1)) - x.unsqueeze(2)
         proposal_forward_unnorm = torch.exp(
             -(1 / 2) * torch.einsum("bsd,bsvd->bsv", grad_x, D)
-            - (1 / (2 * alpha)) * (D.norm(dim=-1, p=P) ** P)
+            - (1 / (2 * alpha)) * (torch.pow(D.norm(dim=-1, p=P), P))
         )
         proposal_forward = proposal_forward_unnorm / proposal_forward_unnorm.sum(
             dim=-1, keepdim=True
         )
 
         tokens_next = (
-            torch.multinomial(proposal_forward.squeeze(), 1).squeeze().unsqueeze(0)
+            torch.multinomial(proposal_forward_unnorm.squeeze(), 1)
+            .squeeze()
+            .unsqueeze(0)
         )
         prob_forward = torch.gather(proposal_forward, 2, tokens_next.unsqueeze(2))
         x_next = embedding_layer(tokens_next)
+
         log_p_x_next = energy_function(x_next, context, target)
         grad_x_next = grad_energy(x_next, context, target)
         D_next = embedding_matrix.expand((-1, seq_length, -1, -1)) - x_next.unsqueeze(2)
+
         proposal_backward_unnorm = torch.exp(
             -(1 / 2) * torch.einsum("bsd,bsvd->bsv", grad_x_next, D_next)
-            - (1 / (2 * alpha)) * (D_next.norm(dim=-1, p=P) ** P)
+            - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
         )
         proposal_backward = proposal_backward_unnorm / proposal_backward_unnorm.sum(
             dim=-1, keepdim=True
@@ -57,17 +61,30 @@ def pNCG(
         prob_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
 
         acceptance_probs = (
-            (prob_backward.log() - prob_forward.log()) + (log_p_x_next - log_p_x)
+            (prob_backward.log() - prob_forward.log()) - (log_p_x - log_p_x_next)
         ).exp()
         p = torch.rand(acceptance_probs.shape, device=acceptance_probs.device)
         accepted_transitions = torch.where(
             p < torch.min(torch.ones_like(acceptance_probs), acceptance_probs)
         )[1]
-        # import ipdb
 
-        # ipdb.set_trace()
         x[:, accepted_transitions, :] = x_next[:, accepted_transitions, :]
         print("#accepted =", len(accepted_transitions))
+
+        # accept_prob = torch.min(
+        #     (
+        #         (prob_backward.log().sum() - prob_forward.log().sum())
+        #         + (log_p_x_next - log_p_x)
+        #     ).exp(),
+        #     torch.tensor(1.0, device=device),
+        # )
+
+        # if torch.rand(1, device=device) < accept_prob:
+        #     x = torch.Tensor(x_next)
+        #     print("Accepted, prob =", accept_prob.item())
+        # else:
+        #     print("Rejected, prob =", accept_prob.item())
+
         del (
             x_next,
             tokens_next,
@@ -83,29 +100,34 @@ def pNCG(
             proposal_forward_unnorm,
             proposal_forward,
             prob_forward,
-            acceptance_probs,
-            p,
+            # acceptance_probs,
+            # p,
         )
 
     return get_input_ids(embedding_layer.weight, x)
 
 
 if __name__ == "__main__":
-    from transformers import Blip2Processor, Blip2ForConditionalGeneration
-    from speaker import Blip2Speaker
+    from transformers import (
+        Blip2Processor,
+        Blip2ForConditionalGeneration,
+        GPT2LMHeadModel,
+        GPT2Tokenizer,
+    )
+    from speaker import Blip2Speaker, GPT2Speaker
     import torch
     from PIL import Image
     from pathlib import Path
 
-    processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b-coco")
+    # processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b-coco")
 
-    model = Blip2ForConditionalGeneration.from_pretrained(
-        "Salesforce/blip2-opt-2.7b-coco",
-        device_map="cuda:0",
-        torch_dtype=torch.bfloat16,
-    )
+    # model = Blip2ForConditionalGeneration.from_pretrained(
+    #     "Salesforce/blip2-opt-2.7b-coco",
+    #     device_map="cuda:0",
+    #     torch_dtype=torch.bfloat16,
+    # )
 
-    speaker = Blip2Speaker(model, processor)
+    # speaker = Blip2Speaker(model, processor)
 
     img_set = "open-images-2057_2fc6afbbb663b164"
     image_path = Path(
@@ -113,38 +135,45 @@ if __name__ == "__main__":
     )
     images = [Image.open(image_path / img_set / f"img{i}.jpg") for i in range(10)]
 
-    inputs = processor(images=images[5], return_tensors="pt").to(model.device)
-    outputs = model.generate(
-        **inputs, do_sample=True, output_scores=True, return_dict_in_generate=True
-    )
+    # inputs = processor(images=images[5], return_tensors="pt").to(model.device)
+    # outputs = model.generate(
+    #     **inputs, do_sample=True, output_scores=True, return_dict_in_generate=True
+    # )
 
-    init_seq = torch.randint(
-        0, model.language_model.get_input_embeddings().num_embeddings, (1, 32)
-    ).to(model.device)
-    init_state = model.language_model.get_input_embeddings()(init_seq)
-    init_state[0, : outputs.sequences.shape[1], :] = (
-        model.language_model.get_input_embeddings()(outputs.sequences[0])
-    )
-    print(init_state.shape)
+    # init_seq = torch.randint(
+    #     0, model.language_model.get_input_embeddings().num_embeddings, (1, 32)
+    # ).to(model.device)
+    # init_state = model.language_model.get_input_embeddings()(init_seq)
+    # init_state[0, : outputs.sequences.shape[1], :] = (
+    #     model.language_model.get_input_embeddings()(outputs.sequences[0])
+    # )
+    # print(init_state.shape)
 
-    print(
-        torch.gather(
-            torch.stack(outputs.scores, dim=1), 2, outputs.sequences.unsqueeze(2)
-        )
-        .log_softmax(dim=-1)
-        .sum()
+    # print(
+    #     torch.gather(
+    #         torch.stack(outputs.scores, dim=1), 2, outputs.sequences.unsqueeze(2)
+    #     )
+    #     .log_softmax(dim=-1)
+    #     .sum()
+    # )
+
+    model = GPT2LMHeadModel.from_pretrained(
+        "gpt2", device_map="cuda:0", torch_dtype=torch.float32
     )
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
+    speaker = GPT2Speaker(model, tokenizer)
 
     sample = pNCG(
         images,
         5,
-        16,
+        8,
         speaker.energy,
-        model.language_model.get_input_embeddings(),
+        model.get_input_embeddings(),
         100,
-        1.0,
+        0.25,
         10,
         model.device,
         # init_state=init_state,
     )
-    print(processor.batch_decode(sample, skip_special_tokens=True))
+    print(tokenizer.batch_decode(sample, skip_special_tokens=True))
