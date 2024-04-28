@@ -128,21 +128,21 @@ class GPT2Speaker:
     ) -> torch.Tensor:
         input_ids = self.get_input_ids(input_embeds)
 
-        embeds_with_bos = torch.cat(
-            (
-                self.model.get_input_embeddings()(
-                    torch.tensor(
-                        self.processor.bos_token_id,
-                        dtype=torch.long,
-                        device=self.model.device,
-                    )
-                )
-                .unsqueeze(0)
-                .unsqueeze(0),
-                input_embeds,
-            ),
-            dim=1,
-        )
+        #embeds_with_bos = torch.cat(
+        #    (
+        #        self.model.get_input_embeddings()(
+        #            torch.tensor(
+        #                self.processor.bos_token_id,
+        #                dtype=torch.long,
+        #                device=self.model.device,
+        #            )
+        #        )
+        #        .unsqueeze(0)
+        #        .unsqueeze(0),
+        #        input_embeds,
+        #    ),
+        #    dim=1,
+        #)
 
         outputs = self.model(
             # inputs_embeds=embeds_with_bos,
@@ -156,9 +156,9 @@ class GPT2Speaker:
         actual_log_probs = torch.gather(log_probs, 2, input_ids.unsqueeze(2)).squeeze(
             -1
         )
-        log_likelihood = actual_log_probs.sum()
+        log_likelihood = actual_log_probs.sum(dim=-1)
 
-        return -log_likelihood
+        return -log_likelihood.squeeze()
 
 
 if __name__ == "__main__":

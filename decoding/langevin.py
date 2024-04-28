@@ -11,18 +11,21 @@ def pNCG(
     n_iterations,
     alpha,
     P,
+    tokenizer,
     device,
     init_state=None,
 ):
+    batch_size=1
     grad_energy = torch.func.grad(energy_function)
     embedding_matrix = embedding_layer.weight.unsqueeze(0).unsqueeze(0)
     x = (
         embedding_layer(
-            torch.randint(0, embedding_layer.num_embeddings, (1, seq_length)).to(device)
+            torch.randint(0, embedding_layer.num_embeddings, (batch_size, seq_length)).to(device)
         )
         if init_state is None
         else init_state
     )
+
 
     for n in range(n_iterations):
         tokens = get_input_ids(embedding_layer.weight, x)
@@ -30,7 +33,7 @@ def pNCG(
         print(log_p_x.item())
         grad_x = grad_energy(x, context, target)
 
-        D = embedding_matrix.expand((-1, seq_length, -1, -1)) - x.unsqueeze(2)
+        D = embedding_matrix.expand((batch_size, seq_length, -1, -1)) - x.unsqueeze(2)
         proposal_forward_unnorm = torch.exp(
             -(1 / 2) * torch.einsum("bsd,bsvd->bsv", grad_x, D)
             - (1 / (2 * alpha)) * (torch.pow(D.norm(dim=-1, p=P), P))
@@ -44,25 +47,39 @@ def pNCG(
             .squeeze()
             .unsqueeze(0)
         )
-        prob_forward = torch.gather(proposal_forward, 2, tokens_next.unsqueeze(2))
+
+        #tokens_next = (
+        #    torch.argmax(proposal_forward_unnorm, dim=2)
+        #)
+        prob_forward = torch.gather(proposal_forward_unnorm, 2, tokens_next.unsqueeze(2))
         x_next = embedding_layer(tokens_next)
 
-        log_p_x_next = energy_function(x_next, context, target)
+        #print(tokens,tokens_next)
+        print(tokenizer.batch_decode(tokens), tokenizer.batch_decode(tokens_next))
+
+        x_next_mult = x.clone().unsqueeze(1).expand(-1, seq_length, -1, -1)
+        x_next_mult[:, range(seq_length), range(seq_length), :] = x_next
+        x_next_mult = x_next_mult.reshape(-1, x_next_mult.shape[2], x_next_mult.shape[3])
+
+        log_p_x_next = energy_function(x_next_mult, context, target).reshape(batch_size, seq_length, -1)
+        #print(log_p_x_next)
         grad_x_next = grad_energy(x_next, context, target)
-        D_next = embedding_matrix.expand((-1, seq_length, -1, -1)) - x_next.unsqueeze(2)
+        D_next = embedding_matrix.expand((batch_size*seq_length, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)
 
         proposal_backward_unnorm = torch.exp(
             -(1 / 2) * torch.einsum("bsd,bsvd->bsv", grad_x_next, D_next)
             - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
         )
+
         proposal_backward = proposal_backward_unnorm / proposal_backward_unnorm.sum(
             dim=-1, keepdim=True
         )
-        prob_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
+        prob_backward = torch.gather(proposal_backward_unnorm, 2, tokens.unsqueeze(2))
 
         acceptance_probs = (
-            (prob_backward.log() - prob_forward.log()) - (log_p_x - log_p_x_next)
-        ).exp()
+            (prob_backward.log() - prob_forward.log()) + (log_p_x - log_p_x_next)
+        ).exp().squeeze(-1)
+        #print(acceptance_probs)
         p = torch.rand(acceptance_probs.shape, device=acceptance_probs.device)
         accepted_transitions = torch.where(
             p < torch.min(torch.ones_like(acceptance_probs), acceptance_probs)
@@ -164,16 +181,20 @@ if __name__ == "__main__":
 
     speaker = GPT2Speaker(model, tokenizer)
 
+    init_state = torch.tensor(tokenizer('He was waiting at the gym')['input_ids'], dtype=torch.int).unsqueeze(0).to(model.device)
+
+    print(init_state)
     sample = pNCG(
         images,
-        5,
-        8,
+        10,
+        6,
         speaker.energy,
         model.get_input_embeddings(),
         100,
-        0.25,
+        1,
         10,
+        tokenizer,
         model.device,
-        # init_state=init_state,
+        init_state=model.get_input_embeddings()(init_state),
     )
     print(tokenizer.batch_decode(sample, skip_special_tokens=True))
