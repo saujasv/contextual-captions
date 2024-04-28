@@ -61,7 +61,7 @@ def pNCG(
         prob_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
 
         acceptance_probs = (
-            (prob_backward.log() - prob_forward.log()) - (log_p_x - log_p_x_next)
+            (prob_backward.log() - prob_forward.log()) + (log_p_x - log_p_x_next)
         ).exp()
         p = torch.rand(acceptance_probs.shape, device=acceptance_probs.device)
         accepted_transitions = torch.where(
@@ -69,6 +69,7 @@ def pNCG(
         )[1]
 
         x[:, accepted_transitions, :] = x_next[:, accepted_transitions, :]
+        # x = x_next
         print("#accepted =", len(accepted_transitions))
 
         # accept_prob = torch.min(
@@ -100,8 +101,8 @@ def pNCG(
             proposal_forward_unnorm,
             proposal_forward,
             prob_forward,
-            # acceptance_probs,
-            # p,
+            acceptance_probs,
+            p,
         )
 
     return get_input_ids(embedding_layer.weight, x)
@@ -167,11 +168,11 @@ if __name__ == "__main__":
     sample = pNCG(
         images,
         5,
-        8,
+        20,
         speaker.energy,
         model.get_input_embeddings(),
         100,
-        0.25,
+        1.0,
         10,
         model.device,
         # init_state=init_state,
