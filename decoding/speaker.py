@@ -1,13 +1,9 @@
-from transformers import Blip2Processor, Blip2ForConditionalGeneration, Blip2ForConditionalGenerationModelOutput
 from pathlib import Path
-import requests
-import openclip
-import torchvision.transforms.transforms as T
-from listener import CLIPListener, Listener
-from PIL import image
-import ipdb
+from typing import List
+import torch.nn.functional as F
+from PIL import Image
+from utils import get_input_ids
 import torch
-import numpy as np
 
 
 BLIP_MODEL = "Salesforce/blip2-opt-2.7b-coco"
@@ -15,179 +11,193 @@ CLIP_MODEL = "ViT-B-32-quickgelu"
 
 N = 256
 ALPHA = 1
-P=3
+P = 3
 
 
-class Blip2ForConditionalGenerationWithSampling(Blip2ForConditionalGeneration):
-    config = BlipConfig
+class Blip2Speaker:
+    def __init__(self, model, processor):
+        self.model = model
+        self.processor = processor
 
-    def __init__(self, config:BlipConfig):
-        super().__init__(config)
-        self.config = config
+    def get_input_ids(self, input_embeds: torch.Tensor):
+        # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
+        embeddings = self.model.language_model.get_input_embeddings().weight
 
-    def forward(
+        return get_input_ids(embeddings, input_embeds)
+
+    def energy(
         self,
-        pixel_values: torch.FloatTensor,
-        input_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        labels: Optional[torch.LongTensor] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, Blip2ForConditionalGenerationModelOutput]:
+        input_embeds: torch.Tensor,
+        contexts: List[Image.Image],
+        target: int,
+    ) -> torch.Tensor:
+        input_ids = self.get_input_ids(input_embeds)
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        vision_outputs = self.vision_model(
+        # input_embeds.retain_grad()
+        pixel_values = self.processor(images=contexts[target], return_tensors="pt")[
+            "pixel_values"
+        ].to(device=self.model.device, dtype=self.model.dtype)
+        vision_outputs = self.model.vision_model(
             pixel_values=pixel_values,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict
+            output_attentions=True,
+            output_hidden_states=True,
+            return_dict=False,
         )
+        image_embeds = vision_outputs[0]
 
-        image_embeds = vision_outputs[1]
+        image_attention_mask = torch.ones(
+            image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device
+        )
+        query_tokens = self.model.query_tokens.expand(image_embeds.shape[0], -1, -1)
+        query_outputs = self.model.qformer(
+            query_embeds=query_tokens,
+            encoder_hidden_states=image_embeds,
+            encoder_attention_mask=image_attention_mask,
+            output_attentions=False,
+            output_hidden_states=False,
+            return_dict=False,
+        )
+        query_output = query_outputs[0]  # (2, 32, 768)
 
-        image_attention_mask = torch.ones(image_embeds.size()[:-1], dtype=torch.long, device=image_embeds.device)
+        language_model_inputs = self.model.language_projection(query_output)
 
-        query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-
-        language_model_inputs = self.language_projection(query_output)
         language_model_attention_mask = torch.ones(
-            language_model_inputs.size()[:-1], dtype=torch.long, device=language_model_inputs.device
+            language_model_inputs.size()[:-1],
+            dtype=torch.long,
+            device=language_model_inputs.device,
         )
 
-        if input_ids is not None:
-            inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
-        inputs_embeds = torch.cat([language_model_inputs, inputs_embeds.to(language_model_inputs.device)], dim=1)
+        final_inputs_embeds = torch.cat(
+            [
+                language_model_inputs,
+                input_embeds.expand((language_model_inputs.size(0), -1, -1)).to(
+                    language_model_inputs.device
+                ),
+            ],
+            dim=1,
+        )
 
-        if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-        expected_device = language_model_attention_mask.device
-        attention_mask = torch.cat([language_model_attention_mask, attention_mask.to(expected_device)], dim=1)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask = torch.cat(
+            [
+                language_model_attention_mask,
+                attention_mask.expand((language_model_inputs.size(0), -1)).to(
+                    language_model_attention_mask.device
+                ),
+            ],
+            dim=1,
+        )
 
-        if self.config.use_decoder_only_language_model:
-            outputs = self.language_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        outputs = self.model.language_model(
+            inputs_embeds=final_inputs_embeds,
+            attention_mask=attention_mask,
+            output_attentions=False,
+            output_hidden_states=False,
+            return_dict=True,
+        )
 
-            logits = outputs.logits if return_dict else outputs[0]
-            loss = None
-            # we compute the loss here since we need to take into account the sequence length of the query embeds
-            if labels is not None:
-                labels = labels.to(logits.device)
-                logits = logits[:, -labels.size(1) :, :]
-                # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous().to(logits.device)
+        log_probs = F.log_softmax(
+            outputs.logits[:, language_model_inputs.size(1) :, :], dim=-1
+        )
+        actual_log_probs = torch.gather(
+            log_probs,
+            2,
+            input_ids.expand((language_model_inputs.size(0), -1)).unsqueeze(-1),
+        ).squeeze(-1)
+        log_likelihood = actual_log_probs.sum()
 
-                # Flatten the tokens
-                loss_fct = CrossEntropyLoss(reduction="mean")
+        return log_likelihood
 
-                loss = loss_fct(shift_logits.view(-1, self.config.text_config.vocab_size), shift_labels.view(-1))
-            else:
-                outputs = self.language_model(
-                    inputs_embeds=inputs_embeds,
-                    attention_mask=attention_mask,
-                    decoder_input_ids=decoder_input_ids,
-                    decoder_attention_mask=decoder_attention_mask,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
-                    labels=labels,
+
+class GPT2Speaker:
+    def __init__(self, model, processor):
+        self.model = model
+        self.processor = processor
+
+    def get_input_ids(self, input_embeds: torch.Tensor):
+        # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
+        embeddings = self.model.get_input_embeddings().weight
+
+        return get_input_ids(embeddings, input_embeds)
+
+    def energy(
+        self,
+        input_embeds: torch.Tensor,
+        contexts: List[Image.Image],
+        target: int,
+    ) -> torch.Tensor:
+        input_ids = self.get_input_ids(input_embeds)
+
+        embeds_with_bos = torch.cat(
+            (
+                self.model.get_input_embeddings()(
+                    torch.tensor(
+                        self.processor.bos_token_id,
+                        dtype=torch.long,
+                        device=self.model.device,
+                    )
                 )
-                loss = outputs.loss if return_dict else outputs[0]
-                logits = outputs.logits if return_dict else outputs[1]
-
-        if not return_dict:
-            outputs = (outputs[0], outputs[1], image_embeds, vision_outputs[0]) + vision_outputs[2:]
-            return tuple(output for output in outputs if output is not None)
-
-        return Blip2ForConditionalGenerationModelOutput(
-            loss=outputs.loss,
-            logits=outputs.logits,
-            vision_outputs=vision_outputs,
-            qformer_outputs=query_outputs,
-            language_model_outputs=outputs,
+                .unsqueeze(0)
+                .unsqueeze(0),
+                input_embeds,
+            ),
+            dim=1,
         )
+
+        outputs = self.model(
+            # inputs_embeds=embeds_with_bos,
+            inputs_embeds=input_embeds,
+            output_attentions=False,
+            output_hidden_states=False,
+            return_dict=True,
+        )
+
+        log_probs = F.log_softmax(outputs.logits, dim=-1)
+        actual_log_probs = torch.gather(log_probs, 2, input_ids.unsqueeze(2)).squeeze(
+            -1
+        )
+        log_likelihood = actual_log_probs.sum()
+
+        return -log_likelihood
 
 
 if __name__ == "__main__":
+    from transformers import Blip2Processor, Blip2ForConditionalGeneration
+    import torch
+    from PIL import Image
+    from pathlib import Path
 
-    processor = Blip2Processor.from_pretrained(BLIP_MODEL)
+    processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b-coco")
 
     model = Blip2ForConditionalGeneration.from_pretrained(
-        BLIP_MODEL,
-        torch_dtype=torch.bfloat16,
+        "Salesforce/blip2-opt-2.7b-coco",
         device_map="cuda:0",
+        torch_dtype=torch.bfloat16,
     )
 
-    url = "https://github.com/haotian-liu/LLaVA/blob/1a91fc274d7c35a9b50b3cb29c4247ae5837ce39/images/llava_v1_5_radar.jpg?raw=true"
-    image = Image.open(requests.get(url, stream=True).raw)
-    prompt = ""
+    speaker = Blip2Speaker(model, processor)
 
-    clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
-        model_name=CLIP_MODEL,
-        pretrained="metaclip_fulcc",
-        device="cuda:1",
-        precision="bfloat16",
+    img_set = "open-images-2057_2fc6afbbb663b164"
+    image_path = Path(
+        "/data/tir/projects/tir3/users/svadugur/pragmatic-clip/image-sets"
     )
-    tokenizer = open_clip.get_tokenizer("ViT-B-32-quickgelu")
-    listener = CLIPListener(clip_model, clip_preprocess, tokenizer, "cuda:1")
+    images = [Image.open(image_path / img_set / f"img{i}.jpg") for i in range(10)]
 
-    image_path = Path()
-    image_sets = []
-    contexts = []
-    targets = []
+    text = "A elderly lady in a pink top is having a conversation with another elderly lady."
+    input_ids = processor(text=text, return_tensors="pt").input_ids.to(model.device)
+    print(input_ids)
 
-    inputs = processor(
-        text=[prompt for _ in range(len(contexts))][:1]
-        images=[ctx[t] for ctx, t in zip(contexts, targets)][:1]
-        return_tensors="pt"
-    ).to("cuda:0")
+    embeds = model.language_model.get_input_embeddings()(input_ids)
+    # energy = speaker.energy(embeds, images, 5)
+    grad_energy = torch.func.grad(speaker.energy)(embeds, images, 5)
 
-    x0 = model.text_decoder.language_model.get_input_embeddings()(inputs['input_ids'])
-    x0.requires_grad = True
-    inputs['input_ids'] = None
+    embedding_matrix = (
+        model.language_model.get_input_embeddings().weight.unsqueeze(0).unsqueeze(0)
+    )
 
-    alpha = torch.tensor(alpha, dtype=torch.FloatTensor).to("cuda:0")
+    S = embeds.size(1)
+    d = embedding_matrix.expand((-1, S, -1, -1)) - embeds.unsqueeze(2)
 
-    outputx0 = model(**inputs, inputs_embeds=x0)
-    logitsx0 = outputx0.logits
-    energyx0, = torch.autograd.grad(logitsx0, x0, torch.ones_like(logitsx0).to("cuda:0"))
-    px0 = torch.exp(logitsx0)
+    import ipdb
 
-    for n in range(N):
-        eps = torch.randn(x0.shape).to("cuda:1")
-        x1 = x0 - alpha / 2 * energyx0 + torch.sqrt(alpha) * eps
-
-        outputx1 = model(**inputs, inputs_embeds=x1)
-        logitsx1 = outputsx0.logits
-        energyx1, = torch.autograd.grad(logitsx1, x1, torch.ones_like(logitsx1).to("cuda:0"))
-
-        qx1x0 = torch.exp(-0.5 * torch.dot(dlogitsx0, x1 - x0) - (1 / (2 * alpha)) * torch.norm(x1 - x0, p=P))
-        qx0x1 = torch.exp(-0.5 * torch.dot(dlogitsx1, x0 - x1) - (1 / (2 * alpha)) * torch.norm(x0 - x1, p=P))
-
-        px1 = torch.exp(logitsx1)
-
-        a = torch.min(torch.ones_like(x0).to("cuda:0"), (px1 * qx0x1) / (px0 * qx1x0))
-
-        updates = (torch.rand(x0.shape).to("cuda:0") < a).nonzero()
-
-        x0[updates] = x1[updates]
-        outputsx0 = model(**inputs, inputs_embeds=x0)
-        logitsx0 = ouptutx0.logits
-        energyx0 = torch.autograd.grad(logitsx0, x0, torch.ones_like(logitsx0).to("cuda:0"))
-        px0 = torch.exp(logitsx0)
-        print()
-        print(processor.decoder(output, skip_special_tokens=True))
-
-
+    ipdb.set_trace()
