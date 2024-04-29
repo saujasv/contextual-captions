@@ -78,10 +78,10 @@ class Blip2Speaker:
 
         # print(language_model_inputs.shape)
 
-
         final_inputs_embeds = torch.cat(
             [
                 language_model_inputs.expand((input_embeds.shape[0], -1, -1)),
+                self.model.get_input_embeddings()(torch.tensor(self.processor.tokenizer.bos_token_id, dtype=torch.long, device=self.model.device)).unsqueeze(0).unsqueeze(0).expand((input_embeds.shape[0], -1, -1)),
                 input_embeds.to(
                     language_model_inputs.device
                 ),
@@ -89,7 +89,7 @@ class Blip2Speaker:
             dim=1,
         )
 
-        attention_mask = torch.ones_like(input_ids)
+        attention_mask = torch.ones_like(torch.cat((torch.tensor(self.processor.tokenizer.bos_token_id, dtype=torch.long, device=input_ids.device).unsqueeze(0).unsqueeze(0).expand((input_ids.size(0), -1)), input_ids), dim=1))
         attention_mask = torch.cat(
             [
                 language_model_attention_mask.expand((attention_mask.shape[0], -1)),
@@ -109,7 +109,7 @@ class Blip2Speaker:
         )
 
         log_probs = F.log_softmax(
-            outputs.logits[:, language_model_inputs.size(1) :, :], dim=-1
+            outputs.logits[:, language_model_inputs.size(1) : -1, :], dim=-1
         )
         actual_log_probs = torch.gather(
             log_probs,
