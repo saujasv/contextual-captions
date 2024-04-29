@@ -8,7 +8,7 @@ from einops import rearrange
 import itertools
 from transformers import Blip2ForConditionalGeneration, Blip2Processor
 import torch.nn.functional as F
-from utils import get_input_ids
+from .utils import get_input_ids
 
 
 class Listener:
