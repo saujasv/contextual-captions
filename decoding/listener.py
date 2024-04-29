@@ -225,7 +225,7 @@ class Blip2Listener:
         ).squeeze(-1)
         log_likelihood = actual_log_probs.sum(dim=-1)
 
-        return log_likelihood[target] - torch.logsumexp(log_likelihood, 0)
+        return -log_likelihood[target] + torch.logsumexp(log_likelihood, 0)
 
 
 if __name__ == "__main__":
