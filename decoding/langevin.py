@@ -7,6 +7,7 @@ def pNCG(
     target,
     seq_length,
     energy_function,
+    listener_energy_function,
     embedding_layer,
     n_iterations,
     alpha,
@@ -18,6 +19,7 @@ def pNCG(
 ):
     batch_size=1
     grad_energy = torch.func.grad(energy_function)
+    listener_grad_energy = torch.func.grad(listener_energy_function)
     embedding_matrix = embedding_layer.weight.unsqueeze(0).unsqueeze(0)
 
 
@@ -36,7 +38,9 @@ def pNCG(
         tokens = get_input_ids(embedding_layer.weight, x)
         log_p_x = energy_function(x, context, target)
         print(log_p_x.item())
-        grad_x = grad_energy(x, context, target)
+        grad_x_speaker = grad_energy(x, context, target).detach()
+        grad_x_listener = listener_grad_energy(x, context, target).detach()
+        grad_x = grad_x_speaker + grad_x_listener
 
         D = embedding_matrix.expand((batch_size, seq_length, -1, -1)) - x.unsqueeze(2)
 
@@ -97,7 +101,9 @@ def pNCG(
             log_p_x_mult_next = energy_function(x_next_mult, context, target).detach()
             log_p_x_next.append(log_p_x_mult_next)
 
-            grad_x_next_mult = grad_energy(x_next_mult, context, target).detach()
+            grad_x_next_mult_speaker = grad_energy(x_next_mult, context, target).detach()
+            grad_x_next_mult_listener = listener_grad_energy(x_next_mult, context, target).detach()
+            grad_x_next_mult = grad_x_next_mult_speaker + grad_x_next_mult_listener
 
             # D_next = embedding_matrix.expand((batch_size*seq_length, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)
 
@@ -200,6 +206,7 @@ if __name__ == "__main__":
         GPT2Tokenizer,
     )
     from speaker import Blip2Speaker, GPT2Speaker
+    from listener import Blip2Listener
     import torch
     from PIL import Image
     from pathlib import Path
@@ -213,6 +220,7 @@ if __name__ == "__main__":
     )
 
     speaker = Blip2Speaker(model, processor)
+    listener = Blip2Listener(model, processor)
 
     img_set = "open-images-2057_2fc6afbbb663b164"
     image_path = Path(
@@ -269,6 +277,7 @@ if __name__ == "__main__":
         3,
         init_state.shape[1],
         speaker.energy,
+        listener.energy,
         model.language_model.get_input_embeddings(),
         100,
         5.0,
