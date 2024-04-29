@@ -58,7 +58,7 @@ def main(data_file, save_file, n_captions):
         for i in range(n_captions):
             sample = pNCG(
                 images,
-                3,
+                int(x["image_index"]),
                 init_state.shape[1],
                 speaker.energy,
                 listener.energy,
