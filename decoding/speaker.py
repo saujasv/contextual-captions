@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List
 import torch.nn.functional as F
 from PIL import Image
-from utils import get_input_ids
+from .utils import get_input_ids
 import torch
 
 
