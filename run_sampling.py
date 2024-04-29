@@ -39,23 +39,24 @@ def main(data_file, save_file, n_captions):
         inputs = processor(
             images=images[int(x["image_index"])], return_tensors="pt"
         ).to(model.device)
-        outputs = model.generate(
-            **inputs,
-            do_sample=True,
-            output_scores=True,
-            return_dict_in_generate=True,
-            max_new_tokens=32,
-        )
-        init_state = outputs.sequences[0].unsqueeze(0)
-        cutoff = (
-            (outputs.sequences[0] == 50140).nonzero()[0]
-            if torch.any(outputs.sequences[0] == 50140)
-            else outputs.sequences[0].shape[0]
-        )
-        init_state = init_state[:, :cutoff]
 
         captions = []
         for i in range(n_captions):
+            outputs = model.generate(
+                **inputs,
+                do_sample=True,
+                output_scores=True,
+                return_dict_in_generate=True,
+                max_new_tokens=32,
+            )
+            init_state = outputs.sequences[0].unsqueeze(0)
+            cutoff = (
+                (outputs.sequences[0] == 50140).nonzero()[0]
+                if torch.any(outputs.sequences[0] == 50140)
+                else outputs.sequences[0].shape[0]
+            )
+            init_state = init_state[:, :cutoff]
+
             sample = pNCG(
                 images,
                 int(x["image_index"]),
@@ -77,8 +78,8 @@ def main(data_file, save_file, n_captions):
             )
         x["captions"] = captions
 
-    with open(save_file, "w") as f:
-        json.dump(data, f)
+        with open(save_file, "w") as f:
+            json.dump(data, f)
 
 
 if __name__ == "__main__":
