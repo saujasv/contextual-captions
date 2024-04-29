@@ -72,51 +72,80 @@ def pNCG(
         # print(tokens,tokens_next)
         print(tokenizer.batch_decode(tokens), tokenizer.batch_decode(tokens_next))
 
-        x_next_mult = x.clone().unsqueeze(1).expand(-1, seq_length, -1, -1).clone()
-        x_next_mult[range(batch_size), range(seq_length), range(seq_length)] = x_next
-        x_next_mult = x_next_mult.reshape(-1, x_next_mult.shape[2], x_next_mult.shape[3])
+        #x_next_mult = x.clone().unsqueeze(1).expand(-1, seq_length, -1, -1).clone()
+        #x_next_mult[range(batch_size), range(seq_length), range(seq_length)] = x_next
+        #x_next_mult = x_next_mult.reshape(-1, x_next_mult.shape[2], x_next_mult.shape[3])
 
-        log_p_x_next = energy_function(x_next_mult, context, target)
-        log_p_x_next = log_p_x_next.reshape(batch_size, seq_length, -1)
-        grad_x_next = grad_energy(x_next, context, target)
-
-
-        D_next = embedding_matrix.expand((batch_size*seq_length, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)
+        #log_p_x_next = energy_function(x_next_mult, context, target)
+        #log_p_x_next = log_p_x_next.reshape(batch_size, seq_length, -1)
+        #grad_x_next = grad_energy(x_next_mult, context, target)
 
 
-        #proposal_backward_unnorm = torch.exp(
-        #    - (1/ 2) * torch.einsum("bsd,bsvd->bsv", grad_x_next, D_next)
-        #    - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
-        #)
+
+        prob_backward = []
+        log_p_x_next = []
 
 
-        proposal_backward_unnorm = torch.stack([torch.exp(
-            - (1/ 2) * torch.einsum("sd,svd->sv", grad_x_next[i], D_next[i])
-            - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
-        ) for i in range(grad_x_next.shape[0])]).squeeze()
+        # D_next = embedding_matrix.expand((batch_size*seq_length, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)
+        # print(D_next.shape)
 
-        #import ipdb
+        for i in range(seq_length):
 
-        #ipdb.set_trace()
+            x_next_mult = x.clone()
+            x_next_mult[:, i, :] =  x_next[:, i, :]
+
+            log_p_x_mult_next = energy_function(x_next_mult, context, target).detach()
+            log_p_x_next.append(log_p_x_mult_next)
+
+            grad_x_next_mult = grad_energy(x_next_mult, context, target).detach()
+
+            # D_next = embedding_matrix.expand((batch_size*seq_length, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)
+
+            D_next = (embedding_matrix.expand((batch_size, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)).detach()
+
+            # proposal_backward_unnorm = torch.exp(
+            #    - (1/ 2) * torch.einsum("bsd,bsvd->bsv", grad_x_next, D_next)
+            #    - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
+            # )
 
 
-        proposal_backward = proposal_backward_unnorm
+            # proposal_backward_unnorm = torch.stack([torch.exp(
+            #    - (1/ 2) * torch.einsum("sd,svd->sv", grad_x_next[i], D_next[i])
+            #    - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
+            # ) for i in range(grad_x_next.shape[0])]).squeeze()
+
+            proposal_backward_unnorm = torch.exp(
+                - (1 / 2) * torch.einsum("bsd, bsvd -> bsv", grad_x_next_mult, D_next)
+                - (1 / (2 * alpha)) * (torch.pow(D_next.norm(dim=-1, p=P), P))
+            )
+
+            proposal_backward = proposal_backward_unnorm
+            proposal_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
+            #proposal_backward = proposal_backward[tokens[:, i], :]
+
+            prob_backward.append(proposal_backward[:, i, :].detach())
+            # prob_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
+
+            del D_next
+            del x_next_mult
+            del grad_x_next_mult
 
 
-        prob_backward = torch.gather(proposal_backward, 2, tokens.unsqueeze(2))
+        prob_backward = torch.stack(prob_backward, dim=1)
+        log_p_x_next = torch.stack(log_p_x_next)
 
         acceptance_probs = (
-            (prob_backward.log() - prob_forward.log()) + (log_p_x - log_p_x_next)
+            (prob_backward.squeeze().log() - prob_forward.squeeze().log()) + (log_p_x - log_p_x_next)
         ).exp().squeeze(-1)
 
-        print(prob_backward.log(), prob_forward.log(), log_p_x, log_p_x_next)
+        #print(prob_backward.log(), prob_forward.log(), log_p_x, log_p_x_next)
 
         # print(acceptance_probs)
 
         p = torch.rand(acceptance_probs.shape, device=acceptance_probs.device)
         accepted_transitions = torch.where(
             p < torch.min(torch.ones_like(acceptance_probs), acceptance_probs)
-        )[1]
+        )[0]
 
         x[:, accepted_transitions, :] = x_next[:, accepted_transitions, :]
         # x = x_next
@@ -142,11 +171,13 @@ def pNCG(
             tokens_next,
             log_p_x,
             log_p_x_next,
+            #log_p_x_next_mult,
             grad_x,
-            grad_x_next,
-            x_next_mult,
+            #grad_x_next,
+            #grad_x_mult_next,
+            #x_next_mult,
             D,
-            D_next,
+            #D_next,
             proposal_backward_unnorm,
             proposal_backward,
             prob_backward,
@@ -191,11 +222,15 @@ if __name__ == "__main__":
 
     inputs = processor(images=images[5], return_tensors="pt").to(model.device)
     outputs = model.generate(
-        **inputs, do_sample=True, output_scores=True, return_dict_in_generate=True, max_new_tokens=8
+        **inputs, do_sample=True, output_scores=True, return_dict_in_generate=True, max_new_tokens=32,
     )
 
     print(processor.batch_decode(outputs.sequences[0]))
     init_state = outputs.sequences[0].unsqueeze(0)
+    print(outputs.sequences[0])
+    cutoff = (outputs.sequences[0]==50140).nonzero()[0] if torch.any(outputs.sequences[0]==50140) else outputs.sequences[0].shape[0]
+    print(cutoff)
+    init_state = init_state[:, :cutoff]
 
     #init_seq = torch.randint(
     #    0, model.language_model.get_input_embeddings().num_embeddings, (1, 16)
@@ -232,13 +267,13 @@ if __name__ == "__main__":
     sample = pNCG(
         images,
         3,
-        8,
+        init_state.shape[1],
         speaker.energy,
         model.language_model.get_input_embeddings(),
-        500,
+        100,
         5.0,
         10,
-        20,
+        10,
         processor.tokenizer,
         model.device,
         init_state=model.language_model.get_input_embeddings()(init_state),
