@@ -23,16 +23,19 @@ class Blip2Speaker:
         # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
 
         embeddings = self.model.language_model.get_input_embeddings().weight
-        #print(input_embeds.shape)
-        out = torch.zeros(input_embeds.shape[0], input_embeds.shape[1], dtype=torch.int64).to('cuda:0')
+        # print(input_embeds.shape)
+        out = torch.zeros(
+            input_embeds.shape[0], input_embeds.shape[1], dtype=torch.int64
+        ).to("cuda:0")
 
-        #print(out.shape)
+        # print(out.shape)
         for batch in range(input_embeds.shape[0]):
-            #print(get_input_ids(embeddings, input_embeds[batch].unsqueeze(0)).squeeze().shape)
-            out[batch] = get_input_ids(embeddings, input_embeds[batch].unsqueeze(0)).squeeze()
+            # print(get_input_ids(embeddings, input_embeds[batch].unsqueeze(0)).squeeze().shape)
+            out[batch] = get_input_ids(
+                embeddings, input_embeds[batch].unsqueeze(0)
+            ).squeeze()
 
         return out
-
 
     def energy(
         self,
@@ -81,21 +84,41 @@ class Blip2Speaker:
         final_inputs_embeds = torch.cat(
             [
                 language_model_inputs.expand((input_embeds.shape[0], -1, -1)),
-                self.model.get_input_embeddings()(torch.tensor(self.processor.tokenizer.bos_token_id, dtype=torch.long, device=self.model.device)).unsqueeze(0).unsqueeze(0).expand((input_embeds.shape[0], -1, -1)),
-                input_embeds.to(
-                    language_model_inputs.device
-                ),
+                self.model.get_input_embeddings()(
+                    torch.tensor(
+                        self.processor.tokenizer.bos_token_id,
+                        dtype=torch.long,
+                        device=self.model.device,
+                    )
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .expand((input_embeds.shape[0], -1, -1)),
+                input_embeds.to(language_model_inputs.device),
             ],
             dim=1,
         )
 
-        attention_mask = torch.ones_like(torch.cat((torch.tensor(self.processor.tokenizer.bos_token_id, dtype=torch.long, device=input_ids.device).unsqueeze(0).unsqueeze(0).expand((input_ids.size(0), -1)), input_ids), dim=1))
+        attention_mask = torch.ones_like(
+            torch.cat(
+                (
+                    torch.tensor(
+                        self.processor.tokenizer.bos_token_id,
+                        dtype=torch.long,
+                        device=input_ids.device,
+                    )
+                    .unsqueeze(0)
+                    .unsqueeze(0)
+                    .expand((input_ids.size(0), -1)),
+                    input_ids,
+                ),
+                dim=1,
+            )
+        )
         attention_mask = torch.cat(
             [
                 language_model_attention_mask.expand((attention_mask.shape[0], -1)),
-                attention_mask.to(
-                    language_model_attention_mask.device
-                ),
+                attention_mask.to(language_model_attention_mask.device),
             ],
             dim=1,
         )
@@ -130,13 +153,17 @@ class GPT2Speaker:
     def get_input_ids(self, input_embeds: torch.Tensor):
         # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
         embeddings = self.model.get_input_embeddings().weight
-        #print(input_embeds.shape)
-        out = torch.zeros(input_embeds.shape[0], input_embeds.shape[1], dtype=torch.int64).to('cuda:0')
+        # print(input_embeds.shape)
+        out = torch.zeros(
+            input_embeds.shape[0], input_embeds.shape[1], dtype=torch.int64
+        ).to("cuda:0")
 
-        #print(out.shape)
+        # print(out.shape)
         for batch in range(input_embeds.shape[0]):
-            #print(get_input_ids(embeddings, input_embeds[batch].unsqueeze(0)).squeeze().shape)
-            out[batch] = get_input_ids(embeddings, input_embeds[batch].unsqueeze(0)).squeeze()
+            # print(get_input_ids(embeddings, input_embeds[batch].unsqueeze(0)).squeeze().shape)
+            out[batch] = get_input_ids(
+                embeddings, input_embeds[batch].unsqueeze(0)
+            ).squeeze()
 
         return out
 
@@ -190,14 +217,14 @@ class GPT2Speaker:
         log_probs = F.log_softmax(outputs.logits, dim=-1)
         # actual_log_probs = torch.gather(log_probs, 2, input_ids.unsqueeze(2)).squeeze(
         #    -1
-        #)
-        #log_likelihood = actual_log_probs.sum(dim=-1)
+        # )
+        # log_likelihood = actual_log_probs.sum(dim=-1)
 
         actual_log_probs = torch.gather(
             log_probs[:, :-1, :], 2, input_ids.unsqueeze(2)
         ).squeeze(-1)
-        #print(actual_log_probs.shape)
-        #print(actual_log_probs)
+        # print(actual_log_probs.shape)
+        # print(actual_log_probs)
         log_likelihood = actual_log_probs.sum(dim=-1)
 
         return -log_likelihood.squeeze()

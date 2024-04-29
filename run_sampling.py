@@ -34,7 +34,7 @@ def main(data_file, save_file, n_captions):
     )
     for x in data:
         images = [
-            Image.open(image_path / x["img_set"] / f"img{i}.jpg") for i in range(10)
+            Image.open(image_path / x["image_set"] / f"img{i}.jpg") for i in range(10)
         ]
         inputs = processor(
             images=images[int(x["image_index"])], return_tensors="pt"
