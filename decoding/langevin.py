@@ -13,6 +13,7 @@ def pNCG(
     alpha,
     P,
     k,
+    mix_lambda,
     tokenizer,
     device,
     init_state=None,
@@ -40,7 +41,7 @@ def pNCG(
         print(log_p_x.item())
         grad_x_speaker = grad_energy(x, context, target).detach()
         grad_x_listener = listener_grad_energy(x, context, target).detach()
-        grad_x = grad_x_speaker + grad_x_listener
+        grad_x = mix_lambda * grad_x_speaker + (1 - mix_lambda) * grad_x_listener
 
         D = embedding_matrix.expand((batch_size, seq_length, -1, -1)) - x.unsqueeze(2)
 
@@ -103,7 +104,7 @@ def pNCG(
 
             grad_x_next_mult_speaker = grad_energy(x_next_mult, context, target).detach()
             grad_x_next_mult_listener = listener_grad_energy(x_next_mult, context, target).detach()
-            grad_x_next_mult = grad_x_next_mult_speaker + grad_x_next_mult_listener
+            grad_x_next_mult = mix_lambda * grad_x_next_mult_speaker + (1 - mix_lambda) * grad_x_next_mult_listener
 
             # D_next = embedding_matrix.expand((batch_size*seq_length, seq_length, -1, -1)) - x_next_mult.unsqueeze(2)
 
@@ -283,6 +284,7 @@ if __name__ == "__main__":
         5.0,
         10,
         10,
+        0.5,
         processor.tokenizer,
         model.device,
         init_state=model.language_model.get_input_embeddings()(init_state),
