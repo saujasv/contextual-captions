@@ -3,6 +3,8 @@ import torch
 
 def get_input_ids(embeddings: torch.Tensor, input_embeds: torch.Tensor):
     # Solution due to https://discuss.pytorch.org/t/reverse-nn-embedding/142623/8
+
+
     embedding_matrix_size = input_embeds.size(0), input_embeds.size(1), -1, -1
     input_embeds_size = -1, -1, embeddings.size(0), -1
     input_ids = torch.argmin(
