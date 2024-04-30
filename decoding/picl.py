@@ -3,9 +3,9 @@ from typing import List, Union, Optional
 from pathlib import Path
 import open_clip
 import torchvision.transforms.transforms as T
-from listener import CLIPListener, Listener
+from .listener import CLIPListener, Listener
 from PIL import Image
-import ipdb
+import torch
 
 
 class PICLLogitsProcessor(LogitsProcessor):
@@ -47,18 +47,28 @@ class PICLLogitsProcessor(LogitsProcessor):
             .values.unsqueeze(1),
         )
 
-        partial_tokens = torch.cat((input_ids[torch.where(V_head)[0]], torch.where(V_head)[1].unsqueeze(1)), dim=1)
-        partial_texts = self.processor.batch_decode(partial_tokens[:, self.prefix_length:], skip_special_tokens=True)
+        partial_tokens = torch.cat(
+            (input_ids[torch.where(V_head)[0]], torch.where(V_head)[1].unsqueeze(1)),
+            dim=1,
+        )
+        partial_texts = self.processor.batch_decode(
+            partial_tokens[:, self.prefix_length :], skip_special_tokens=True
+        )
 
         listener_scores = self.listener.score_texts(
             partial_texts, image_features=self.context_features
         )
 
-        log_p[*torch.where(V_head)] = (1 - self.informativity) * log_p[*torch.where(V_head)] + self.informativity * listener_scores[0, self.targets, :].to(log_p.device, log_p.dtype)
+        log_p[*torch.where(V_head)] = (1 - self.informativity) * log_p[
+            *torch.where(V_head)
+        ] + self.informativity * listener_scores[0, self.targets, :].to(
+            log_p.device, log_p.dtype
+        )
 
         log_p.masked_fill_(~V_head, float("-inf"))
 
         return log_p
+
 
 if __name__ == "__main__":
     from transformers import Blip2Processor, Blip2ForConditionalGeneration
@@ -84,7 +94,10 @@ if __name__ == "__main__":
     prompt = ""
 
     clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
-        model_name="ViT-B-32-quickgelu", pretrained="metaclip_fullcc", device="cuda:1", precision="bfloat16"
+        model_name="ViT-B-32-quickgelu",
+        pretrained="metaclip_fullcc",
+        device="cuda:1",
+        precision="bfloat16",
     )
     tokenizer = open_clip.get_tokenizer("ViT-B-32-quickgelu")
     listener = CLIPListener(clip_model, clip_preprocess, tokenizer, "cuda:1")
@@ -116,12 +129,7 @@ if __name__ == "__main__":
         max_new_tokens=64,
         logits_processor=[
             PICLLogitsProcessor(
-                listener,
-                contexts[:1],
-                targets[:1],
-                processor,
-                0.9,
-                0.01
+                listener, contexts[:1], targets[:1], processor, 0.9, 0.01
             )
         ],
         do_sample=True,
@@ -129,4 +137,10 @@ if __name__ == "__main__":
         num_beams=1,
     )
 
-    print(*[cap.strip() for cap in processor.batch_decode(output, skip_special_tokens=True)], sep='\nNEXT\n')
+    print(
+        *[
+            cap.strip()
+            for cap in processor.batch_decode(output, skip_special_tokens=True)
+        ],
+        sep="\nNEXT\n",
+    )

@@ -57,25 +57,28 @@ def main(data_file, save_file, n_captions):
             )
             init_state = init_state[:, :cutoff]
 
-            sample = pNCG(
-                images,
-                int(x["image_index"]),
-                init_state.shape[1],
-                speaker.energy,
-                listener.energy,
-                model.language_model.get_input_embeddings(),
-                100,
-                5.0,
-                10,
-                10,
-                0.5,
-                processor.tokenizer,
-                model.device,
-                init_state=model.language_model.get_input_embeddings()(init_state),
-            )
-            captions.append(
-                speaker.processor.batch_decode(sample, skip_special_tokens=True)
-            )
+            try:
+                sample = pNCG(
+                    images,
+                    int(x["image_index"]),
+                    init_state.shape[1],
+                    speaker.energy,
+                    listener.energy,
+                    model.language_model.get_input_embeddings(),
+                    100,
+                    5.0,
+                    10,
+                    10,
+                    0.5,
+                    processor.tokenizer,
+                    model.device,
+                    init_state=model.language_model.get_input_embeddings()(init_state),
+                )
+                captions.append(
+                    speaker.processor.batch_decode(sample, skip_special_tokens=True)
+                )
+            except:
+                continue
         x["captions"] = captions
 
         with open(save_file, "w") as f:

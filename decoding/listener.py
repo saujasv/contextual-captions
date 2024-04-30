@@ -38,12 +38,14 @@ class CLIPListener(Listener):
             open_clip.tokenizer.SigLipTokenizer,
         ],
         device,
+        dtype,
     ):
         super().__init__()
         self.model = model
         self.image_processor = image_processor
         self.tokenizer = tokenizer
         self.device = device
+        self.dtype = dtype
 
     def encode_images(
         self, images: List[List[Union[List[Path], List[str], List[Image.Image]]]]
@@ -61,7 +63,7 @@ class CLIPListener(Listener):
                         ]
                     )
                 )
-            ).to(self.device, dtype=torch.bfloat16)
+            ).to(self.device, dtype=self.dtype)
         else:
             image_inputs = torch.stack(
                 list(
@@ -72,7 +74,7 @@ class CLIPListener(Listener):
                         ]
                     )
                 )
-            ).to(self.device, dtype=torch.bfloat16)
+            ).to(self.device, dtype=self.dtype)
 
         image_features = self.model.encode_image(image_inputs)
         image_features /= image_features.norm(dim=-1, keepdim=True)
