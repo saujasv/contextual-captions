@@ -46,7 +46,7 @@ def ngram_diversity(captions, images, index):
             unique_ngrams[n].extend(g)
             total_ngrams[n] += len(g)
     unique_ngrams = [len(iset(g)) for g in unique_ngrams]
-    return np.sum([unique_ngrams[i]/total_ngrams[i] for i in range(N)])/range(N)
+    return np.sum([unique_ngrams[i]/total_ngrams[i] for i in range(N)])/N
 
 # LLM perplexity of each caption - LLAMA3
 def llama3_perplexity(captions, images, index):
